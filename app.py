@@ -7,8 +7,10 @@ import os
 app = Flask(__name__)
 
 # === 記得改成你自己的 ===
-CHANNEL_ACCESS_TOKEN = os.environ.get("c7ITPvO3FIsT2l89ICa7qBQrJlraMjWAP9x+8+5QppKQR4+suDSCfGENaewZ1/pirwZFLOSwxEFXW2jjEcVosABZScRQ3ukmE4QgkWMtc7VLya84wn0q7NURMNKyIRCZfMsK7aUh34mYrjdsAAgP4gdB04t89/1O/w1cDnyilFU=")
-CHANNEL_SECRET = os.environ.get("88e7b34c82814b602556160a16d93c6b")
+assert CHANNEL_ACCESS_TOKEN, "環境變數 CHANNEL_ACCESS_TOKEN 由Render 的環境變數託管"
+assert LINE_CHANNEL_SECRET, "環境變數 LINE_CHANNEL_SECRET 的環境變數託設定"
+CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
