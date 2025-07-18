@@ -74,7 +74,9 @@ def get_perplexity_reply(user_input):
             {"role": "user", "content": user_input}
         ]
     }
-
+    response = requests.post(url, headers=headers, json=payload)
+    print(response.status_code, response.text)  # 建議 log 下來排查
+    
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
