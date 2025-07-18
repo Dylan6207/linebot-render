@@ -68,7 +68,7 @@ def get_perplexity_reply(user_input):
     }
 
     payload = {
-        "model": "llama-3-70b-instruct",  # 🚀 可改成 sonar-medium-chat / sonar-small-online 等
+        "model": "sonar-pro",  # 🚀 可改成 sonar-medium-chat / sonar-small-online 等
         "messages": [
             {"role": "system", "content": "你是 LINE 機器人，用精簡且友善的語氣回答問題。"},
             {"role": "user", "content": user_input}
