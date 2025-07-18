@@ -3,19 +3,21 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from linebot.exceptions import InvalidSignatureError
 import os
-
 app = Flask(__name__)
 
-# === 記得改成你自己的 ===
-#assert CHANNEL_ACCESS_TOKEN, "環境變數 CHANNEL_ACCESS_TOKEN 由Render 的環境變數託管"
-#assert LINE_CHANNEL_SECRET, "環境變數 LINE_CHANNEL_SECRET 的環境變數託設定"
-#with open("line_secret.json", "r") as f:
-#    secret = json.load(f)
-print("CHANNEL_ACCESS_TOKEN:", CHANNEL_ACCESS_TOKEN)
-assert CHANNEL_ACCESS_TOKEN, "LINE_CHANNEL_ACCESS_TOKEN 沒設，請檢查 Render 設定"
+# 先取得值
+CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")  # Render 的 Key
+LINE_CHANNEL_SECRET  = os.environ.get("LINE_CHANNEL_SECRET")   # Render 的 Key
 
-CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
-CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
+# 然後才能 print 或 assert
+print("CHANNEL_ACCESS_TOKEN:", CHANNEL_ACCESS_TOKEN)
+assert CHANNEL_ACCESS_TOKEN, "CHANNEL_ACCESS_TOKEN 未設定"
+assert LINE_CHANNEL_SECRET, "LINE_CHANNEL_SECRET 未設定"
+
+# 之後才做初始化
+from linebot import LineBotApi
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
