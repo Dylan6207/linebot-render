@@ -11,6 +11,9 @@ app = Flask(__name__)
 #assert LINE_CHANNEL_SECRET, "環境變數 LINE_CHANNEL_SECRET 的環境變數託設定"
 #with open("line_secret.json", "r") as f:
 #    secret = json.load(f)
+print("CHANNEL_ACCESS_TOKEN:", CHANNEL_ACCESS_TOKEN)
+assert CHANNEL_ACCESS_TOKEN, "LINE_CHANNEL_ACCESS_TOKEN 沒設，請檢查 Render 設定"
+
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 
