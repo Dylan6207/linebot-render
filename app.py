@@ -7,10 +7,10 @@ import os
 app = Flask(__name__)
 
 # === 記得改成你自己的 ===
-assert CHANNEL_ACCESS_TOKEN, "環境變數 CHANNEL_ACCESS_TOKEN 由Render 的環境變數託管"
-assert LINE_CHANNEL_SECRET, "環境變數 LINE_CHANNEL_SECRET 的環境變數託設定"
-with open("line_secret.json", "r") as f:
-    secret = json.load(f)
+#assert CHANNEL_ACCESS_TOKEN, "環境變數 CHANNEL_ACCESS_TOKEN 由Render 的環境變數託管"
+#assert LINE_CHANNEL_SECRET, "環境變數 LINE_CHANNEL_SECRET 的環境變數託設定"
+#with open("line_secret.json", "r") as f:
+#    secret = json.load(f)
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 
