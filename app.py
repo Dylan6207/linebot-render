@@ -8,15 +8,15 @@ import requests
 app = Flask(__name__)
 
 # 讀取環境變數
-CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET  = os.environ.get("LINE_CHANNEL_SECRET")
 PERPLEXITY_API_KEY   = os.environ.get("PERPLEXITY_API_KEY")
 
-assert CHANNEL_ACCESS_TOKEN, "CHANNEL_ACCESS_TOKEN 未設定"
+assert LINE_CHANNEL_ACCESS_TOKEN, "LINE_CHANNEL_ACCESS_TOKEN 未設定"
 assert LINE_CHANNEL_SECRET, "LINE_CHANNEL_SECRET 未設定"
 assert PERPLEXITY_API_KEY, "PERPLEXITY_API_KEY 未設定"
 
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 @app.route("/", methods=['GET'])
