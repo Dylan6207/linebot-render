@@ -3,7 +3,9 @@ import base64
 import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageMessage
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage, ImageMessage
+)
 from linebot.exceptions import InvalidSignatureError
 
 app = Flask(__name__)
@@ -21,7 +23,7 @@ assert PERPLEXITY_API_KEY, "Perplexity API key 未設定"
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# ====== 記錄每位用戶是否正在啟動圖片分析，正式環境推薦換用 Redis/DB ======
+# ====== 用於圖片分析權限記錄（建議正式用 Redis/DB）======
 user_image_permission = {}
 
 @app.route("/", methods=['GET'])
@@ -38,59 +40,61 @@ def callback():
         abort(400)
     return "OK"
 
-# ====== 工具：判斷群組內是否需回覆（需要被tag到才理會訊息） ======
+# ====== 工具：判斷群組內是否需回覆（需被@才回）======
 def should_reply_in_group(event, bot_tag):
-    # 只有在群組才需判斷 BOT 是否被 tag 到
     if getattr(event.source, "group_id", None):
         return bot_tag in getattr(getattr(event, "message", {}), "text", "")
     return True
 
-# ====== 自然語義觸發圖片分析：看語句中是否有「圖」、「圖片」、「照片」等 ======
+# ====== 輔助：產生可用於權限的唯一 user key ======
+def get_unique_user_key(event):
+    if getattr(event.source, "group_id", None):
+        return f"{event.source.group_id}:{getattr(event.source, 'user_id', 'anonymous')}"
+    return getattr(event.source, "user_id", "anonymous")
+
+# ====== 功能：偵測是否啟動圖片模式（多關鍵字判斷）======
 def is_request_image_mode(text):
     keywords = ["圖", "圖片", "照片", "分析圖", "看圖"]
     return any(k in text for k in keywords)
 
+# ====== 處理文字訊息 匹配關鍵字進入圖片權限模式/一般對話 ======
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     if not should_reply_in_group(event, BOT_TAG):
         return
-    user_id = event.source.user_id
-    # 不只小寫，提升彈性
+    user_key = get_unique_user_key(event)
     text = event.message.text.replace(BOT_TAG, "").strip().lower()
 
-    # Step 1：若文字含圖/照片…自動啟動傳圖模式
     if is_request_image_mode(text):
-        user_image_permission[user_id] = True
+        user_image_permission[user_key] = True
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="請傳送您想分析的圖片。")
         )
         return
 
-    # Step 2：如已開啟圖片分析但卻收到文字，直接取消圖片分析狀態
-    if user_image_permission.get(user_id, False):
-        user_image_permission[user_id] = False
+    if user_image_permission.get(user_key, False):
+        user_image_permission[user_key] = False
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="已取消圖片分析服務。如還需分析，請再次提及『圖』或『照片』等字眼。")
+            TextSendMessage(text="已取消圖片分析服務。如還需分析請再提到『圖』、『照片』等。")
         )
         return
 
-    # Step 3：一般 Perplexity 聊天文字模式
     reply = get_perplexity_reply(text)
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=reply or "抱歉，AI 沒有回應，請稍後再試 🙇")
     )
 
+# ====== 處理圖片訊息 只允許開啟權限用戶分析圖片 ======
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     if not should_reply_in_group(event, BOT_TAG):
         return
-    user_id = event.source.user_id
+    user_key = get_unique_user_key(event)
 
-    # 僅有主動啟動圖片分析權限才接受圖片
-    if user_image_permission.get(user_id, False):
+    if user_image_permission.get(user_key, False):
         message_id = event.message.id
         img_response = line_bot_api.get_message_content(message_id)
         binary = b"".join(chunk for chunk in img_response.iter_content())
@@ -111,15 +115,14 @@ def handle_image(event):
             event.reply_token,
             TextSendMessage(text=reply or "AI 看不懂這張圖，請換一張再試 🙇")
         )
-        # 用完即關閉該使用者圖片權限（確保不連續洗圖耗流量）
-        user_image_permission[user_id] = False
+        user_image_permission[user_key] = False
     else:
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="如需圖片分析，請先在訊息中包含『圖』、『照片』等關鍵字告知我。")
+            TextSendMessage(text="如需圖片分析，請先在文字訊息中包含『圖』、『照片』等字眼告知我。")
         )
 
-# ====== 處理一般對話：Perplexity API 呼叫封裝 ======
+# ====== 一般對話呼叫 Perplexity API ======
 def get_perplexity_reply(user_input):
     if not user_input.strip():
         user_input = "請用繁體中文介紹一下你自己"
@@ -132,7 +135,7 @@ def get_perplexity_reply(user_input):
     }
     return perplexity_api_call(payload)
 
-# ====== Perplexity API 呼叫工具方法 ======
+# ====== Perplexity API 呼叫工具 ======
 def perplexity_api_call(payload):
     try:
         resp = requests.post(
