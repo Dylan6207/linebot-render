@@ -46,10 +46,11 @@ def should_reply_in_group(event, bot_tag):
         return bot_tag in getattr(getattr(event, "message", {}), "text", "")
     return True
 
-# ====== 輔助：產生可用於權限的唯一 user key ======
+# ====== 輔助：BOT 加入群組後，任何人說出含「圖」字問題，群組內所有成員接下來只要傳圖都能被分析。 ======
 def get_unique_user_key(event):
+    # 群組模式下只用 group_id，保證 key 對得上
     if getattr(event.source, "group_id", None):
-        return f"{event.source.group_id}:{getattr(event.source, 'user_id', 'anonymous')}"
+        return event.source.group_id
     return getattr(event.source, "user_id", "anonymous")
 
 # ====== 功能：偵測是否啟動圖片模式（多關鍵字判斷）======
