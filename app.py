@@ -1,23 +1,18 @@
-#images 會大幅增加 request tokens，請注意流量與費用
-#LINE 群組或私訊出現圖片訊息時，event 物件 message.type 會是 "image"
-#Perplexity 支援 image_url 格式，可直接丟 base64 圖片字串
-#  base64 編碼 
 import os
 import base64
 import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import (MessageEvent, TextMessage, TextSendMessage,
-                            ImageMessage)
+from linebot.models import (MessageEvent, TextMessage, TextSendMessage, ImageMessage)
 from linebot.exceptions import InvalidSignatureError
 
 app = Flask(__name__)
 
-# 環境變數
+# ====== 環境變數設置區 ======
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
-BOT_TAG = "@Dylan-Auto"  # 可自訂
+BOT_TAG = "@Dylan-Auto"  # LINE群組內呼叫機器人時使用的顯示名稱
 
 assert LINE_CHANNEL_ACCESS_TOKEN, "LINE_Channel access token 未設定"
 assert LINE_CHANNEL_SECRET, "Channel secret 未設定"
@@ -25,6 +20,9 @@ assert PERPLEXITY_API_KEY, "Perplexity API key 未設定"
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+# ====== 記錄每位用戶是否正在啟動圖片分析，建議正式環境時用 Redis 或 DB ======
+user_image_permission = {}
 
 @app.route("/", methods=['GET'])
 def index():
@@ -40,58 +38,84 @@ def callback():
         abort(400)
     return "OK"
 
+# ====== 工具：判斷群組內是否需回覆（需要被tag到才理會訊息） ======
 def should_reply_in_group(event, bot_tag):
-    # 若私訊，直接回；若群組需被點名 tag
+    # 若是群組才需要檢查tag；私訊一律回覆
     if getattr(event.source, "group_id", None):
         return bot_tag in getattr(event.message, "text", "")
     return True
 
+# ====== 處理文字訊息：引導圖片服務、AI 聊天，一律清楚回覆 ======
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     if not should_reply_in_group(event, BOT_TAG):
         return
-    q = event.message.text.replace(BOT_TAG, "").strip()
-    reply = get_perplexity_reply(q)
+    user_id = event.source.user_id
+    text = event.message.text.replace(BOT_TAG, "").strip().lower()
+
+    # Step 1：用戶輸入「傳圖」啟動圖片收件模式
+    if text == "傳圖":
+        user_image_permission[user_id] = True
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="請傳送您想分析的圖片。")
+        )
+        return
+
+    # Step 2：若啟動傳圖模式後卻又輸入文字，則取消圖片收件（避免誤觸）
+    if user_image_permission.get(user_id, False):
+        user_image_permission[user_id] = False
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="已取消圖片分析服務。如仍需，請再次輸入『傳圖』。")
+        )
+        return
+
+    # Step 3：一般問題送進 Perplexity 處理
+    reply = get_perplexity_reply(text)
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=reply or "抱歉，AI 沒有回應，請稍後再試 🙇")
     )
 
+# ====== 處理圖片訊息：只在傳圖模式啟動時才處理圖片分析 ======
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     if not should_reply_in_group(event, BOT_TAG):
         return
-    # 下載圖片內容
-    message_id = event.message.id
-    img_response = line_bot_api.get_message_content(message_id)
-    binary = b"".join(chunk for chunk in img_response.iter_content())
-    img_base64 = base64.b64encode(binary).decode("utf-8")
-    mime = "image/jpeg"  # LINE 除少數貼圖外一般都是 jpg
+    user_id = event.source.user_id
 
-    # 用戶有無搭配訊息文字，如無則提供預設描述
-    q = getattr(event.message, "text", "") or "請幫我描述這張照片"
-
-    # 組合 payload 多模態
-    payload = {
-        "model": "sonar-pro",
-        "messages": [
-            {
+    # 僅允許先前輸入「傳圖」後，再傳圖片進行AI辨識
+    if user_image_permission.get(user_id, False):
+        message_id = event.message.id
+        img_response = line_bot_api.get_message_content(message_id)
+        binary = b"".join(chunk for chunk in img_response.iter_content())
+        img_base64 = base64.b64encode(binary).decode("utf-8")
+        mime = "image/jpeg"
+        payload = {
+            "model": "sonar-pro",
+            "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": q},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:{mime};base64,{img_base64}"
-                    }}
+                    {"type": "text", "text": "請分析這張圖片"},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_base64}"}}
                 ]
-            }
-        ]
-    }
-    reply = perplexity_api_call(payload)
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply or "AI 看不懂這張圖，請換一張再試 🙇")
-    )
+            }]
+        }
+        reply = perplexity_api_call(payload)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply or "AI 看不懂這張圖，請換一張再試 🙇")
+        )
+        # 圖片分析後即關閉圖片模式，避免誤觸連刷圖片
+        user_image_permission[user_id] = False
+    else:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="如需圖片分析，請先輸入『傳圖』以開始。")
+        )
 
+# ====== 一般對話：呼叫 Perplexity 模型回覆 ======
 def get_perplexity_reply(user_input):
     if not user_input.strip():
         user_input = "請用繁體中文介紹一下你自己"
@@ -104,6 +128,7 @@ def get_perplexity_reply(user_input):
     }
     return perplexity_api_call(payload)
 
+# ====== 呼叫 Perplexity API 的共用方法 ======
 def perplexity_api_call(payload):
     try:
         resp = requests.post(
