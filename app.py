@@ -5,6 +5,7 @@ from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (MessageEvent, TextMessage, TextSendMessage, ImageMessage)
 from linebot.exceptions import InvalidSignatureError
+import re
 
 app = Flask(__name__)
 
@@ -46,6 +47,9 @@ def should_reply_in_group(event, bot_tag):
     return True
 
 # ====== 處理文字訊息：引導圖片服務、AI 聊天，一律清楚回覆 ======
+# 只要文字中有「圖」即可啟動圖片分析
+def is_request_image_mode(text):
+    return "圖" in text
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     if not should_reply_in_group(event, BOT_TAG):
@@ -53,8 +57,8 @@ def handle_text(event):
     user_id = event.source.user_id
     text = event.message.text.replace(BOT_TAG, "").strip().lower()
 
-    # Step 1：用戶輸入「傳圖」啟動圖片收件模式
-    if text == "傳圖":
+   # Step 1：用戶訊息內含「圖」字皆視為啟動圖片分析
+    if is_request_image_mode(text):
         user_image_permission[user_id] = True
         line_bot_api.reply_message(
             event.reply_token,
@@ -62,16 +66,16 @@ def handle_text(event):
         )
         return
 
-    # Step 2：若啟動傳圖模式後卻又輸入文字，則取消圖片收件（避免誤觸）
+    # Step 2：若啟動傳圖模式卻又輸入文字，則取消圖片收件
     if user_image_permission.get(user_id, False):
         user_image_permission[user_id] = False
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="已取消圖片分析服務。如仍需，請再次輸入『傳圖』。")
+            TextSendMessage(text="已取消圖片分析服務。如需再次分析請包含『圖』字。")
         )
         return
 
-    # Step 3：一般問題送進 Perplexity 處理
+    # Step 3：一般 Perplexity 聊天模式
     reply = get_perplexity_reply(text)
     line_bot_api.reply_message(
         event.reply_token,
