@@ -1,7 +1,7 @@
 #images 會大幅增加 request tokens，請注意流量與費用
 #LINE 群組或私訊出現圖片訊息時，event 物件 message.type 會是 "image"
 #Perplexity 支援 image_url 格式，可直接丟 base64 圖片字串
-#  base64 編碼
+#  base64 編碼 
 import os
 import base64
 import requests
