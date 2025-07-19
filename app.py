@@ -91,6 +91,9 @@ def handle_text(event):
 # ====== 處理圖片訊息 只允許開啟權限用戶分析圖片 ======
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
+    user_key = get_unique_user_key(event)
+    print("DEBUG: user_key=", user_key)
+    print("DEBUG: user_image_permission dict=", user_image_permission
     if not should_reply_in_group(event, BOT_TAG):
         return
     user_key = get_unique_user_key(event)
