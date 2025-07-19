@@ -10,16 +10,16 @@ from linebot.exceptions import InvalidSignatureError
 app = Flask(__name__)
 
 # 環境變數
-CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
 BOT_TAG = "@Dylan-Auto"  # 可自訂
 
-assert CHANNEL_ACCESS_TOKEN, "Channel access token 未設定"
+assert LINE_CHANNEL_ACCESS_TOKEN, "LINE_Channel access token 未設定"
 assert LINE_CHANNEL_SECRET, "Channel secret 未設定"
 assert PERPLEXITY_API_KEY, "Perplexity API key 未設定"
 
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 @app.route("/", methods=['GET'])
