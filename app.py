@@ -1,4 +1,5 @@
 import os
+import time
 import base64
 import requests
 from flask import Flask, request, abort
@@ -10,11 +11,11 @@ from linebot.exceptions import InvalidSignatureError
 
 app = Flask(__name__)
 
-# ====== 1. 取得環境變數與 API Token 設定 ======
+# ====== 1. 環境及API設定 ======
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
-BOT_TAG = "@Dylan-Auto"  # LINE群組內呼叫機器人時的顯示名稱
+BOT_TAG = "@Dylan-Auto"  # 在群組中@的顯示名稱
 
 assert LINE_CHANNEL_ACCESS_TOKEN, "LINE_Channel access token 未設定"
 assert LINE_CHANNEL_SECRET, "Channel secret 未設定"
@@ -23,18 +24,20 @@ assert PERPLEXITY_API_KEY, "Perplexity API key 未設定"
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# ====== 2. 權限暫存（正式環境建議用 Redis/DB） ======
-#   記錄某 group_id（群組）或 user_id（私聊）是否允許分析圖片，下次圖片訊息只在權限打開時才處理
-user_image_permission = {}
+# ====== 2. 權限暫存（正式建議用 Redis/DB）======
+#   記錄權限給每個"group_id:user_id"，內容為權限獲取時的時間戳 
+user_image_permission = {}  # key: "group_id:user_id" or "user_id" ; value: time.time()
+
+PERMISSION_DURATION = 120  # 權限維持秒數(2分鐘)
 
 @app.route("/", methods=['GET'])
 def index():
-    """入口測試用，可判斷服務運作狀態"""
+    """首頁測試用，可判斷服務是否在線。"""
     return "LINE Bot + Perplexity (多模態) OK!"
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    """LINE Webhook 事件接收並分派處理"""
+    """LINE Webhook 事件接收與訊息分派。"""
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     try:
@@ -43,89 +46,92 @@ def callback():
         abort(400)
     return "OK"
 
-# ====== 3. 支援私訊與群組分開判斷 ======
-def get_unique_user_key(event):
-    """
-    - 群組中用 group_id（任何人在同一群組講到'圖'關鍵字、一律啟動該群組分析權限）
-    - 私聊直接用 user_id
-    """
-    if getattr(event.source, "group_id", None):
-        return event.source.group_id
+# ====== 3. 取得權限主鍵（群組唯一：group_id:user_id；私聊：user_id） ======
+def get_group_user_key(event):
+    """若在群組，key為group_id:user_id；私聊只用user_id。"""
+    if getattr(event.source, "group_id", None) and getattr(event.source, "user_id", None):
+        return f"{event.source.group_id}:{event.source.user_id}"
     return getattr(event.source, "user_id", "anonymous")
 
-# ====== 4. 只在群組訊息有tag BOT時才理會，私訊全部皆理 ======
+# ====== 4. 只在群組訊息@BOT時回應；私訊皆回 ======
 def should_reply_in_group(event, bot_tag):
-    """
-    - 群組必須tag BOT名才會觸發（減少群噪）
-    - 私聊一律自動觸發
-    """
+    """群組必須@BOT且內容有text才觸發，私訊皆回。"""
     if getattr(event.source, "group_id", None):
-        # 圖片訊息沒有 text，這裡僅用於文字事件
         return getattr(event.message, "text", "") and bot_tag in event.message.text
     return True
 
-# ====== 5. 判斷句子中是否含'圖'、'照片'等常用觸發詞 ======
+# ====== 5. 是否觸發圖片模式（含'圖'、'照片'等關鍵字） ======
 def is_request_image_mode(text):
-    """
-    - 可擴充如：'圖片', '相片', '分析圖' 等常見表達
-    - 只要出現任一即進入圖片流程
-    """
+    """自訂所有能啟動圖片分析的語詞。"""
     keywords = ["圖", "圖片", "照片", "分析圖", "看圖"]
     return any(k in text for k in keywords)
 
-# ====== 6. 文字訊息處理主流程 ======
+# ====== 6. 權限管理，授權時記錄時間戳 ======
+def grant_image_permission(user_key):
+    """授予指定user_key圖片分析權限，記入當下時間戳。"""
+    user_image_permission[user_key] = time.time()
+
+def check_image_permission(user_key, valid_duration=PERMISSION_DURATION):
+    """
+    檢查圖片分析權限是否仍在有效期內：
+      - 有且在指定秒數內返回True
+      - 否則刪除權限並回False
+    """
+    now = time.time()
+    timestamp = user_image_permission.get(user_key)
+    if timestamp and (now - timestamp) < valid_duration:
+        return True
+    elif timestamp:
+        del user_image_permission[user_key]
+    return False
+
+# ====== 7. 處理文字訊息 ======
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    # 判斷是否需要回覆：群組需tag BOT，私訊則不需
+    # 僅群組要tag BOT才處理
     if not should_reply_in_group(event, BOT_TAG):
         return
-    user_key = get_unique_user_key(event)
+    key = get_group_user_key(event)
     text = getattr(event.message, "text", "").replace(BOT_TAG, "").strip().lower()
 
-    # （一）訊息內含關鍵字：進入圖片分析權限
+    # （1）觸發圖片模式，授予權限
     if is_request_image_mode(text):
-        user_image_permission[user_key] = True
+        grant_image_permission(key)
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="請傳送您想分析的圖片。")
+            TextSendMessage(
+                text="請在兩分鐘內上傳您想分析的圖片。"
+            )
         )
         return
 
-    # （二）之前已進入圖片分析流程，但現在收到的是文字，則結束該狀態
-    if user_image_permission.get(user_key, False):
-        user_image_permission[user_key] = False
+    # （2）若已處於權限模式但再發文字，則關閉（防止誤觸連串圖片）
+    if key in user_image_permission:
+        del user_image_permission[key]
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="已取消圖片分析服務。如還需分析請再於訊息說明欲看『圖』、『照片』等。")
+            TextSendMessage(text="已取消圖片分析服務。如還需請再次@Dylan-Auto並說明圖需求。")
         )
         return
 
-    # （三）一般文本提問，呼叫 Perplexity 聊天回覆
+    # （3）其它一般文字對話
     reply = get_perplexity_reply(text)
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=reply or "抱歉，AI 沒有回應，請稍後再試 🙇")
     )
 
-# ====== 7. 處理圖片訊息流程 ======
+# ====== 8. 處理圖片訊息（需檢查權限及過期） ======
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
-    # 在圖片訊息請勿用 should_reply_in_group，因圖片沒 text，需純以權限判斷
-    user_key = get_unique_user_key(event)
-    print("DEBUG handle_image: user_key =", user_key)
-    print("DEBUG handle_image: user_image_permission dict =", user_image_permission)
-
-    # 僅當權限啟動時才允許進行圖片辨識
-    if user_image_permission.get(user_key, False):
+    key = get_group_user_key(event)
+    # 僅有效權限且未過期才允許圖片分析（一次性；分析完或逾時自動失效）
+    if check_image_permission(key):
         message_id = event.message.id
         img_response = line_bot_api.get_message_content(message_id)
-        # 將圖片二進位資料合併
         binary = b"".join(chunk for chunk in img_response.iter_content())
-        # base64 編碼
         img_base64 = base64.b64encode(binary).decode("utf-8")
-        mime = "image/jpeg"  # LINE 除貼圖外均為 jpg
-
-        # 組成多模態 payload，請求 Perplexity API
+        mime = "image/jpeg"  # LINE 圖片幾乎都是 jpeg
         payload = {
             "model": "sonar-pro",
             "messages": [{
@@ -141,16 +147,17 @@ def handle_image(event):
             event.reply_token,
             TextSendMessage(text=reply or "AI 看不懂這張圖，請換一張再試 🙇")
         )
-        # 分析完畢立即關閉該權限
-        user_image_permission[user_key] = False
+        # 權限自動過期（check_image_permission已處理）
     else:
-        # 未啟動權限時直接提示，避免無限制耗費讀流量
+        # 超過時效或 never 被授權→清楚提醒用戶  
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="如需圖片分析，請先於訊息說明想看『圖』、『照片』或相關字眼。")
+            TextSendMessage(
+                text="超過兩分鐘未貼圖，或尚未指派圖片分析，請再次@Dylan-Auto並說明圖需求。"
+            )
         )
 
-# ====== 8. Perplexity API的一般聊天流程 ======
+# ====== 9. Perplexity API一般聊天 ======
 def get_perplexity_reply(user_input):
     if not user_input.strip():
         user_input = "請用繁體中文介紹一下你自己"
@@ -163,7 +170,7 @@ def get_perplexity_reply(user_input):
     }
     return perplexity_api_call(payload)
 
-# ====== 9. Perplexity API請求共用函式 ======
+# ====== 10. Perplexity API 多模態對話呼叫 ======
 def perplexity_api_call(payload):
     try:
         resp = requests.post(
@@ -182,4 +189,3 @@ def perplexity_api_call(payload):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run("0.0.0.0", port=port)
-
